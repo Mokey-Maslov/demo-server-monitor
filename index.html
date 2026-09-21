@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пульс — мониторинг сервера</title>
+<meta name="description" content="Демо-дашборд мониторинга сервера: статус сервисов, нагрузка, инциденты. Пример настройки мониторинга для клиента.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid-line:      #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --accent:         #2a78d6;
+    --accent-fill:    rgba(42,120,214,0.14);
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --serious:        #ec835a;
+    --critical:       #d03b3b;
+    --good-bg:        rgba(12,163,12,0.10);
+    --warning-bg:     rgba(250,178,25,0.16);
+    --critical-bg:    rgba(208,59,59,0.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid-line:      #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --accent:         #3987e5;
+      --accent-fill:    rgba(57,135,229,0.18);
+      --good-bg:        rgba(12,163,12,0.16);
+      --warning-bg:     rgba(250,178,25,0.14);
+      --critical-bg:    rgba(208,59,59,0.16);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid-line:      #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --accent:         #3987e5;
+    --accent-fill:    rgba(57,135,229,0.18);
+    --good-bg:        rgba(12,163,12,0.16);
+    --warning-bg:     rgba(250,178,25,0.14);
+    --critical-bg:    rgba(208,59,59,0.16);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding-inline: 16px;
+    padding-block: 28px 48px;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+
+  .banner {
+    background: var(--warning-bg);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    text-align: center;
+  }
+  .banner b { color: var(--text-primary); }
+
+  header.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; padding-block: 4px; }
+  header.top h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  header.top .sub { color: var(--text-secondary); font-size: 14px; }
+  .server-id { color: var(--text-muted); font-size: 13px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .tile .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .tile .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .value.good { color: var(--good); }
+  .tile .value.warn { color: var(--warning); }
+  .tile .hint { font-size: 12px; color: var(--text-secondary); }
+
+  .panel {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+
+  .services { display: flex; flex-direction: column; gap: 0; }
+  .service-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--grid-line);
+    font-size: 14px;
+  }
+  .service-row:last-child { border-bottom: none; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px;
+    white-space: nowrap;
+  }
+  .chip svg { width: 10px; height: 10px; flex: none; }
+  .chip.good { background: var(--good-bg); color: var(--good); }
+  .chip.warning { background: var(--warning-bg); color: color-mix(in srgb, var(--warning) 60%, var(--text-primary)); }
+  .chip.critical { background: var(--critical-bg); color: var(--critical); }
+  .svc-name { font-weight: 500; }
+  .svc-detail { color: var(--text-muted); font-size: 12px; }
+  .svc-uptime { color: var(--text-secondary); font-variant-numeric: tabular-nums; text-align: right; }
+
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 760px) { .charts-grid { grid-template-columns: 1fr; } }
+  .chart-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 16px 12px;
+    position: relative;
+  }
+  .chart-card .chart-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .chart-card h3 { font-size: 13px; margin: 0; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em; }
+  .chart-card .now { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .chart-wrap { position: relative; }
+  .chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .tooltip {
+    position: absolute; pointer-events: none; z-index: 2;
+    background: var(--text-primary); color: var(--surface-1);
+    font-size: 11px; padding: 5px 8px; border-radius: 6px;
+    transform: translate(-50%, -115%);
+    white-space: nowrap; opacity: 0; transition: opacity 80ms ease;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  .tooltip.show { opacity: 1; }
+
+  .incidents { display: flex; flex-direction: column; gap: 0; }
+  .incident {
+    display: grid; grid-template-columns: 16px 1fr auto; gap: 12px;
+    padding: 12px 0; border-bottom: 1px solid var(--grid-line); font-size: 13px;
+  }
+  .incident:last-child { border-bottom: none; }
+  .incident .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+  .incident .dot.warning { background: var(--warning); }
+  .incident .dot.critical { background: var(--critical); }
+  .incident .dot.good { background: var(--good); }
+  .incident .text b { font-weight: 600; }
+  .incident .meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .incident .time { color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  footer.demo-footer {
+    text-align: center; color: var(--text-muted); font-size: 12px;
+    padding-top: 8px; line-height: 1.6;
+  }
+  footer.demo-footer b { color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="banner">⚠ <b>Демо-проект.</b> Данные смоделированы для показа возможностей — это не показатели реального сервера.</div>
+
+  <header class="top">
+    <div>
+      <h1>Пульс</h1>
+      <div class="sub">Мониторинг сервера и уведомления об инцидентах</div>
+    </div>
+    <div class="server-id mono" id="server-id">shop-prod-01 · 178.62.14.90 · обновлено только что</div>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="panel">
+    <h2>Сервисы</h2>
+    <div class="services" id="services"></div>
+  </div>
+
+  <div class="charts-grid" id="charts"></div>
+
+  <div class="panel">
+    <h2>Лента инцидентов — последние 30 дней</h2>
+    <div class="incidents" id="incidents"></div>
+  </div>
+
+  <footer class="demo-footer">
+    Так может выглядеть мониторинг вашего сервера: статус сервисов, графики нагрузки и лента<br>
+    инцидентов в одном окне, с уведомлением ответственного при отклонении от нормы.<br>
+    <b>Демо-проект</b> — данные смоделированы, реального сервера за дашбордом нет.
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  // seeded RNG so the "live" numbers stay consistent across reloads
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rnd = mulberry32(20260921);
+
+  const POINTS = 48; // every 30 min over 24h
+  const now = new Date();
+  const times = Array.from({length: POINTS}, (_, i) => {
+    const d = new Date(now.getTime() - (POINTS - 1 - i) * 30 * 60000);
+    return d;
+  });
+
+  function series(base, amp, noise, spikeAt, spikeVal) {
+    return times.map((t, i) => {
+      let v = base + Math.sin(i / 6) * amp + (rnd() - 0.5) * noise;
+      if (spikeAt !== undefined && Math.abs(i - spikeAt) <= 1) {
+        v = spikeVal - Math.abs(i - spikeAt) * (spikeVal - base) * 0.4;
+      }
+      return Math.max(0, v);
+    });
+  }
+
+  const cpu = series(24, 8, 6, 40, 92);
+  const ram = series(61, 4, 3);
+  const disk = series(58, 0.4, 0.6).map((v, i) => v + i * 0.06); // slow upward trend
+  const resp = series(120, 25, 20, 40, 480);
+
+  function fmtTime(d) {
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
+  function fmtDay(d) {
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + fmtTime(d);
+  }
+
+  // ---- stat tiles ----
+  const avgResp = Math.round(resp.reduce((a, b) => a + b, 0) / resp.length);
+  const curCpu = Math.round(cpu[cpu.length - 1]);
+  const tiles = [
+    { label: 'Аптайм · 30 дней', value: '99.94%', hint: '4 сервиса, взвешенно', cls: 'good' },
+    { label: 'Среднее время отклика', value: avgResp + ' мс', hint: 'API, за 24 часа', cls: '' },
+    { label: 'Инцидентов · 30 дней', value: '3', hint: 'все устранены', cls: '' },
+    { label: 'Нагрузка CPU сейчас', value: curCpu + '%', hint: 'shop-prod-01', cls: curCpu > 70 ? 'warn' : 'good' },
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(t => `
+    <div class="tile">
+      <div class="label">${t.label}</div>
+      <div class="value ${t.cls}">${t.value}</div>
+      <div class="hint">${t.hint}</div>
+    </div>`).join('');
+
+  // ---- services ----
+  const iconGood = '<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5" fill="currentColor"/></svg>';
+  const services = [
+    { name: 'Веб-сервер (nginx)', detail: 'shop-prod-01', status: 'good', label: 'Работает', uptime: '99.99%' },
+    { name: 'База данных (PostgreSQL)', detail: 'db-prod-01, реплика db-prod-02', status: 'good', label: 'Работает', uptime: '100.00%' },
+    { name: 'API', detail: 'api.shop.example', status: 'warning', label: 'Деградация', uptime: '99.81%' },
+    { name: 'Очередь задач (Redis)', detail: 'уведомления, отложенные заказы', status: 'good', label: 'Работает', uptime: '99.97%' },
+  ];
+  document.getElementById('services').innerHTML = services.map(s => `
+    <div class="service-row">
+      <span class="chip ${s.status}">${iconGood}${s.label}</span>
+      <span>
+        <div class="svc-name">${s.name}</div>
+        <div class="svc-detail">${s.detail}</div>
+      </span>
+      <span class="svc-uptime">${s.uptime}<div class="svc-detail" style="text-align:right">аптайм 30д</div></span>
+      <span></span>
+    </div>`).join('');
+
+  // ---- charts ----
+  const chartDefs = [
+    { id: 'cpu', title: 'CPU', unit: '%', data: cpu, max: 100, color: 'var(--accent)' },
+    { id: 'ram', title: 'RAM', unit: '%', data: ram, max: 100, color: 'var(--accent)' },
+    { id: 'disk', title: 'Диск', unit: '%', data: disk, max: 100, color: 'var(--accent)' },
+    { id: 'resp', title: 'Время отклика', unit: ' мс', data: resp, max: null, color: 'var(--accent)' },
+  ];
+
+  const chartsEl = document.getElementById('charts');
+  chartDefs.forEach(def => {
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    const last = def.data[def.data.length - 1];
+    card.innerHTML = `
+      <div class="chart-head">
+        <h3>${def.title}</h3>
+        <span class="now mono">${Math.round(last)}${def.unit}</span>
+      </div>
+      <div class="chart-wrap" id="wrap-${def.id}">
+        <div class="tooltip mono" id="tip-${def.id}"></div>
+      </div>`;
+    chartsEl.appendChild(card);
+    drawChart(def);
+  });
+
+  function drawChart(def) {
+    const W = 480, H = 130, padL = 30, padR = 6, padT = 10, padB = 18;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+    const data = def.data;
+    const maxV = def.max !== null ? def.max : Math.max(...data) * 1.15;
+    const minV = 0;
+    const x = i => padL + (i / (data.length - 1)) * innerW;
+    const y = v => padT + innerH - ((v - minV) / (maxV - minV)) * innerH;
+
+    const linePts = data.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+    const areaPts = `${padL},${padT + innerH} ${linePts} ${padL + innerW},${padT + innerH}`;
+
+    const yTicks = [minV, maxV / 2, maxV];
+    const gridLines = yTicks.map(t => `
+      <line x1="${padL}" y1="${y(t)}" x2="${padL + innerW}" y2="${y(t)}" stroke="var(--grid-line)" stroke-width="1"/>
+      <text x="${padL - 6}" y="${y(t) + 3}" text-anchor="end" font-size="9" fill="var(--text-muted)" font-family="IBM Plex Mono, monospace">${Math.round(t)}</text>
+    `).join('');
+
+    const lastX = x(data.length - 1), lastY = y(data[data.length - 1]);
+
+    const svg = `
+      <svg viewBox="0 0 ${W} ${H}" id="svg-${def.id}">
+        <defs>
+          <linearGradient id="fill-${def.id}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${def.color}" stop-opacity="0.22"/>
+            <stop offset="100%" stop-color="${def.color}" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        ${gridLines}
+        <line x1="${padL}" y1="${padT + innerH}" x2="${padL + innerW}" y2="${padT + innerH}" stroke="var(--baseline)" stroke-width="1"/>
+        <polygon points="${areaPts}" fill="url(#fill-${def.id})"/>
+        <polyline points="${linePts}" fill="none" stroke="${def.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+        <circle cx="${lastX}" cy="${lastY}" r="4" fill="${def.color}"/>
+        <circle cx="${lastX}" cy="${lastY}" r="7" fill="${def.color}" opacity="0.18"/>
+        <g id="hover-${def.id}" opacity="0">
+          <line x1="0" y1="${padT}" x2="0" y2="${padT + innerH}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,2"/>
+          <circle r="4" fill="${def.color}" stroke="var(--surface-1)" stroke-width="2"/>
+        </g>
+        <rect x="${padL}" y="0" width="${innerW}" height="${H}" fill="transparent" style="cursor:crosshair" id="capture-${def.id}"/>
+      </svg>`;
+    const wrap = document.getElementById('wrap-' + def.id);
+    wrap.insertAdjacentHTML('afterbegin', svg);
+
+    const svgEl = document.getElementById('svg-' + def.id);
+    const capture = document.getElementById('capture-' + def.id);
+    const hoverG = document.getElementById('hover-' + def.id);
+    const hoverLine = hoverG.querySelector('line');
+    const hoverDot = hoverG.querySelector('circle');
+    const tip = document.getElementById('tip-' + def.id);
+
+    function pointerMove(clientX, clientY) {
+      const rect = svgEl.getBoundingClientRect();
+      const px = ((clientX - rect.left) / rect.width) * W;
+      let idx = Math.round(((px - padL) / innerW) * (data.length - 1));
+      idx = Math.max(0, Math.min(data.length - 1, idx));
+      const vx = x(idx), vy = y(data[idx]);
+      hoverLine.setAttribute('x1', vx); hoverLine.setAttribute('x2', vx);
+      hoverDot.setAttribute('cx', vx); hoverDot.setAttribute('cy', vy);
+      hoverG.setAttribute('opacity', 1);
+      const tipX = ((vx / W) * rect.width);
+      const tipY = ((vy / H) * rect.height);
+      tip.style.left = tipX + 'px';
+      tip.style.top = tipY + 'px';
+      tip.textContent = fmtTime(times[idx]) + '  ' + Math.round(data[idx]) + def.unit;
+      tip.classList.add('show');
+    }
+    capture.addEventListener('mousemove', e => pointerMove(e.clientX, e.clientY));
+    capture.addEventListener('mouseleave', () => { hoverG.setAttribute('opacity', 0); tip.classList.remove('show'); });
+    capture.addEventListener('touchmove', e => { if (e.touches[0]) pointerMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive: true});
+    capture.addEventListener('touchend', () => { hoverG.setAttribute('opacity', 0); tip.classList.remove('show'); });
+  }
+
+  // ---- incidents ----
+  const incidentDefs = [
+    { i: 40, sev: 'warning', text: 'Высокая нагрузка CPU (92%) на <b>shop-prod-01</b>', meta: 'Автоматически уведомлён администратор · устранено через 6 минут' },
+    { i: null, sev: 'warning', text: 'API отвечает медленнее нормы (480 мс)', meta: 'Причина: пиковая нагрузка от рекламной кампании · устранено масштабированием', offsetDays: 6 },
+    { i: null, sev: 'critical', text: 'Недоступна реплика базы данных <b>db-prod-02</b>', meta: 'Автопереключение на основную базу через 40 секунд · downtime не зафиксирован', offsetDays: 14 },
+    { i: null, sev: 'good', text: 'Плановое обновление nginx до 1.27.3', meta: 'Без простоя, rolling-перезапуск', offsetDays: 21 },
+  ];
+  document.getElementById('incidents').innerHTML = incidentDefs.map(inc => {
+    const t = inc.i !== null ? times[inc.i] : new Date(now.getTime() - (inc.offsetDays || 0) * 86400000);
+    return `
+    <div class="incident">
+      <span class="dot ${inc.sev}"></span>
+      <span class="text">${inc.text}<div class="meta">${inc.meta}</div></span>
+      <span class="time">${fmtDay(t)}</span>
+    </div>`;
+  }).join('');
+
+})();
+</script>
+</body>
+</html>
